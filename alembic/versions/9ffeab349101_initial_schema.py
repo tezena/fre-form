@@ -1,8 +1,8 @@
-"""init_db_structure
+"""initial_schema
 
-Revision ID: 939a94037d78
+Revision ID: 9ffeab349101
 Revises: 
-Create Date: 2026-01-24 09:45:49.107477
+Create Date: 2026-01-31 13:05:43.638680
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import sqlmodel
 
 
 # revision identifiers, used by Alembic.
-revision: str = '939a94037d78'
+revision: str = '9ffeab349101'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -47,10 +47,9 @@ def upgrade() -> None:
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('age', sa.Integer(), nullable=False),
     sa.Column('sex', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('education_level', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('photo_url', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('family_profile', sa.JSON(), nullable=True),
-    sa.Column('phone', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('church', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('category', sa.Enum('CHILDREN', 'ADOLESCENT', 'YOUTH', 'ADULT', name='student_category'), nullable=True),
+    sa.Column('profile_data', sa.JSON(), nullable=True),
     sa.Column('department_id', sa.Integer(), nullable=False),
     sa.Column('created_by_id', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
