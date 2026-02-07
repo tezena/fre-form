@@ -17,6 +17,8 @@ origins = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://fre-one.vercel.app/",
+    "http://10.50.168.151:3000"
 ]
 
 app.add_middleware(
