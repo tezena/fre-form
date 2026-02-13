@@ -1,7 +1,8 @@
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List,Any
+from fastapi import APIRouter, Depends, HTTPException, status , Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, distinct 
+from typing import List, Any, Optional
 from sqlmodel import select as sqlmodel_select
 from app.db.session import get_session
 from app.models.user import User, UserRole, UserDepartment
@@ -15,6 +16,8 @@ from app.core.dependencies import (
 )
 from app.core.security import get_password_hash
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
+
+
 
 router = APIRouter()
 
@@ -224,6 +227,67 @@ async def create_admin(
     return UserResponse(**user_dict)
 
 
+
+
+
+@router.get("/admin/managers", response_model=List[UserResponse])
+async def get_managers(
+    department_id: Optional[int] = Query(None, description="Filter by department ID"),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> Any:
+    """
+    List Managers.
+    - **Super Admin**: Can see all managers, or filter by specific department.
+    - **Admin**: Can ONLY see managers within their assigned departments.
+    """
+    
+    # 1. Base Query: Only fetch users with role='MANAGER'
+    query = select(User).where(User.role == UserRole.MANAGER, User.is_active == True)
+
+    # 2. Permission Logic
+    if current_user.role == UserRole.SUPER_ADMIN:
+        # Super Admin: Optional filter
+        if department_id:
+            # Join with UserDepartment table to filter by dept
+            query = query.join(UserDepartment).where(UserDepartment.department_id == department_id)
+    
+    elif current_user.role == UserRole.ADMIN:
+        # Admin: MUST restrict to their own departments
+        admin_dept_ids = await get_user_departments(current_user.id, session)
+        
+        if not admin_dept_ids:
+            return [] # Admin manages no departments -> sees no managers
+
+        # If Admin requests specific dept, verify they own it
+        if department_id:
+            if department_id not in admin_dept_ids:
+                 raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this department's managers"
+                )
+            query = query.join(UserDepartment).where(UserDepartment.department_id == department_id)
+        else:
+            # Show managers from ALL departments this Admin owns
+            query = query.join(UserDepartment).where(UserDepartment.department_id.in_(admin_dept_ids))
+    
+    else:
+        # Regular users/Managers cannot access this
+        raise HTTPException(status_code=403, detail="Not authorized to view managers")
+
+    # 3. Execution (Distinct to avoid duplicates if a manager is in multiple shared depts)
+    result = await session.execute(query.distinct())
+    managers = result.scalars().all()
+
+    # 4. Attach department_ids to response
+    response_data = []
+    for manager in managers:
+        dept_ids = await get_user_departments(manager.id, session)
+        manager_dict = manager.model_dump()
+        manager_dict["department_ids"] = dept_ids
+        response_data.append(UserResponse(**manager_dict))
+
+    return response_data
 @router.get("/", response_model=List[UserResponse])
 async def list_users(
     current_user: User = Depends(get_current_super_admin),
