@@ -1,102 +1,179 @@
-from sqlmodel import SQLModel, Field, Relationship
-from typing import Optional, Dict, Any, TYPE_CHECKING
-from datetime import datetime
-from sqlalchemy import Column, Enum as SQLAEnum, JSON
-from enum import Enum as PyEnum
+from typing import Optional, List, Dict, Any
+from datetime import date, datetime
+from sqlmodel import SQLModel, Field, Relationship, JSON
+from sqlalchemy import Column, JSON, Enum as SQLAEnum
+from app.models.user import User
+from app.models.enums import (
+    Gender, MaritalStatus, EducationLevel, 
+    OccupationStatus, ChurchAttendance, StudentCategory
+)
 
-# Prevent circular imports: These run only during type checking, not runtime
-if TYPE_CHECKING:
-    from app.models.department import Department
-    from app.models.user import User
-
-
-class StudentCategory(str, PyEnum):
-    CHILDREN = "CHILDREN"
-    ADOLESCENT = "ADOLESCENT"
-    YOUTH = "YOUTH"
-    ADULT = "ADULT"
-
-
+# --- 1. CORE TABLE ---
 class Student(SQLModel, table=True):
-    """Student model with explicit flat profile columns to match API shape."""
     __tablename__ = "students"
-
+    
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str
-    age: int
-    sex: str
-    church: Optional[str] = None
-
-    # Category discriminator stored as SQL Enum
+    full_name: str = Field(index=True)
+    photo_url: Optional[str] = None
+    gender: Gender
+    dob: date
+    
+    # Category Management
     category: StudentCategory = Field(
         sa_column=Column(SQLAEnum(StudentCategory, name="student_category")),
         default=StudentCategory.CHILDREN,
     )
-
-    # Flexible JSON column to hold nested profile object per category
-    profile_data: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
-
-    # Convenience property named `profile` to map to `profile_data` for Pydantic responses
-    @property
-    def profile(self) -> Optional[Dict[str, Any]]:
-        return self.profile_data
-
-    @profile.setter
-    def profile(self, value: Optional[Dict[str, Any]]):
-        self.profile_data = value
-
-    # Provide `category_details` property that returns an object with keys
-    # for each category; only the active category will be populated
-    @property
-    def category_details(self) -> Dict[str, Any]:
-        details = {
-            "child": None,
-            "Adult": None,
-            "youth": None,
-            "Adolescent": None,
-        }
-        if self.profile_data:
-            if self.category == StudentCategory.CHILDREN:
-                details["child"] = self.profile_data
-            elif self.category == StudentCategory.ADOLESCENT:
-                details["Adolescent"] = self.profile_data
-            elif self.category == StudentCategory.YOUTH:
-                details["youth"] = self.profile_data
-            elif self.category == StudentCategory.ADULT:
-                details["Adult"] = self.profile_data
-        return details
-
-    @category_details.setter
-    def category_details(self, value: Dict[str, Any]):
-        # Accept either full category_details object or a single nested dict
-        if not value:
-            self.profile_data = None
-            return
-        # priority: use the nested object that matches current category if present
-        if self.category == StudentCategory.CHILDREN and value.get("child") is not None:
-            self.profile_data = value.get("child")
-        elif self.category == StudentCategory.ADOLESCENT and value.get("Adolescent") is not None:
-            self.profile_data = value.get("Adolescent")
-        elif self.category == StudentCategory.YOUTH and value.get("youth") is not None:
-            self.profile_data = value.get("youth")
-        elif self.category == StudentCategory.ADULT and value.get("Adult") is not None:
-            self.profile_data = value.get("Adult")
-        else:
-            # fallback: if a single nested value is provided (no wrapper), accept it
-            # value might be the nested dict itself
-            if any(k in value for k in ["parentName", "parentPhone", "phone", "education"]):
-                self.profile_data = value
-            else:
-                self.profile_data = None
-
-    # Foreign Keys
     department_id: int = Field(foreign_key="departments.id")
-    created_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    department: "Department" = Relationship()
 
-    # Timestamps
+    created_by_user: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "primaryjoin": "Student.created_by_id==User.id",
+            "lazy": "selectin"
+        }
+    )
+    
+    is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
+    created_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    
+    # Relationships (One-to-One)
+    address: Optional["StudentAddress"] = Relationship(back_populates="student", sa_relationship_kwargs={"uselist": False})
+    education: Optional["StudentEducation"] = Relationship(back_populates="student", sa_relationship_kwargs={"uselist": False})
+    health: Optional["StudentHealth"] = Relationship(back_populates="student", sa_relationship_kwargs={"uselist": False})
+    family: Optional["StudentFamily"] = Relationship(back_populates="student", sa_relationship_kwargs={"uselist": False})
+    spirituality: Optional["StudentSpirituality"] = Relationship(back_populates="student", sa_relationship_kwargs={"uselist": False})
 
-    # Relationships
-    department: "Department" = Relationship(back_populates="students")
-    created_by_user: Optional["User"] = Relationship(back_populates="students")
+
+# --- 2. ADDRESS & DEMOGRAPHICS ---
+class StudentAddress(SQLModel, table=True):
+    __tablename__ = "student_addresses"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="students.id", unique=True)
+    
+    nationality: str = Field(default="Ethiopian")
+    marital_status: Optional[MaritalStatus] = None
+    
+    # Birth Place
+    birth_region: Optional[str] = None
+    birth_zone: Optional[str] = None
+    birth_city: Optional[str] = None
+    birth_woreda: Optional[str] = None
+    birth_kebele: Optional[str] = None
+    
+    # Current Location
+    current_region: Optional[str] = None
+    current_zone: Optional[str] = None
+    current_city: Optional[str] = None
+    current_woreda: Optional[str] = None
+    current_kebele: Optional[str] = None
+    
+    student: Student = Relationship(back_populates="address")
+
+
+# --- 3. EDUCATION & WORK ---
+class StudentEducation(SQLModel, table=True):
+    __tablename__ = "student_education"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="students.id", unique=True)
+    
+    level: Optional[EducationLevel] = None
+    occupation: Optional[OccupationStatus] = None
+    
+    # Higher Ed Details
+    college_name: Optional[str] = None
+    department_name: Optional[str] = None
+    entry_year: Optional[str] = None 
+    certificate_type: Optional[str] = None
+    
+    # Languages (Stored as JSON)
+    languages:  List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
+    
+    student: Student = Relationship(back_populates="education")
+
+
+# --- 4. HEALTH & EMERGENCY ---
+class StudentHealth(SQLModel, table=True):
+    __tablename__ = "student_health"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="students.id", unique=True)
+    
+    has_disability: bool = False
+    disability_details: Optional[str] = None
+    
+    has_trauma: bool = False
+    trauma_details: Optional[str] = None
+    
+    health_issues: Optional[str] = None
+    mental_status: Optional[str] = None
+    
+    # Emergency Contact
+    emergency_name: Optional[str] = None
+    emergency_phone: Optional[str] = None
+    emergency_relation: Optional[str] = None
+    
+    student: Student = Relationship(back_populates="health")
+
+
+# --- 5. SPIRITUALITY & HISTORY ---
+class StudentSpirituality(SQLModel, table=True):
+    __tablename__ = "student_spirituality"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="students.id", unique=True)
+    
+    baptism_name: Optional[str] = None
+    baptism_place: Optional[str] = None
+    
+    has_spiritual_father: bool = False
+    spiritual_father_name: Optional[str] = None
+    spiritual_father_phone: Optional[str] = None
+    
+    has_holy_orders: bool = False 
+    
+    # Sunday School History
+    joined_sunday_school_date: Optional[date] = None
+    reason_for_joining: Optional[str] = None
+    short_bio: Optional[str] = None
+    
+    student: Student = Relationship(back_populates="spirituality")
+
+
+# --- 6. FAMILY INFO ---
+class StudentFamily(SQLModel, table=True):
+    __tablename__ = "student_family"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="students.id", unique=True)
+    
+    # Father
+    father_alive: bool = True
+    father_name: Optional[str] = None
+    father_phone: Optional[str] = None
+    father_occupation: Optional[str] = None
+    father_dob: Optional[date] = None            
+    father_pob: Optional[str] = None             
+    father_education_level: Optional[EducationLevel] = None 
+    father_disability: Optional[str] = None      
+    
+    # Mother
+    mother_alive: bool = True
+    mother_name: Optional[str] = None
+    mother_phone: Optional[str] = None
+    mother_occupation: Optional[str] = None
+    mother_dob: Optional[date] = None            
+    mother_pob: Optional[str] = None             
+    mother_education_level: Optional[EducationLevel] = None 
+    mother_disability: Optional[str] = None      
+    
+    # Guardian
+    guardian_name: Optional[str] = None
+    guardian_phone: Optional[str] = None
+    guardian_relation: Optional[str] = None
+    
+    # Family Context
+    parents_have_spiritual_father: bool = False
+    parents_spiritual_visit_freq: Optional[str] = None
+    parents_church_freq: Optional[ChurchAttendance] = None
+    orthodox_awareness_level: Optional[str] = None
+    family_members_living_together: Optional[str] = None
+    
+    student: Student = Relationship(back_populates="family")

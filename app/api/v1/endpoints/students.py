@@ -1,318 +1,370 @@
-from typing import List
+from typing import List, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 from app.db.session import get_session
-from app.models.student import Student
+from app.models.student import (
+    Student, StudentAddress, StudentFamily, 
+    StudentEducation, StudentHealth, StudentSpirituality, 
+    StudentCategory
+)
 from app.models.department import Department
 from app.models.user import User, UserRole
+from app.schemas.student import (
+    StudentCreate, 
+    StudentResponse, 
+    StudentUpdate, 
+    StudentSummary
+)
 from app.core.dependencies import (
     get_current_active_user,
     get_current_super_admin,
-    require_manager_department_access,
-    get_user_departments,
     check_admin_department_access,
+    get_user_departments,
 )
-from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse
-
-student_examples = {
-    "1_Child": {
-        "summary": "Category: Children",
-        "value": {
-            "name": "Little Caleb",
-            "age": 8,
-            "sex": "M",
-            "church": "St. Mary",
-            "department_id": 1,
-            "category": "CHILDREN",
-            "category_details": {
-                "child": {
-                    "photo_url": "",
-                    "category": "CHILDREN",
-                    "parentName": "Sarah Connor",
-                    "parentPhone": "+251911223344",
-                    "grade": "2nd Grade",
-                    "schoolName": "Future Hope Academy"
-                }
-            }
-        }
-    },
-    "2_Adult": {
-        "summary": "Category: Adult",
-        "value": {
-            "name": "Abebe Bikila",
-            "age": 35,
-            "sex": "M",
-            "church": "Medhane Alem",
-            "department_id": 1,
-            "category": "ADULT",
-            "category_details": {
-                "Adult": {
-                    "photo_url": "",
-                    "category": "ADULT",
-                    "phone": "+251911998877",
-                    "email": "abebe@example.com",
-                    "maritalStatus": "Married",
-                    "occupation": "Engineer",
-                    "education": "BSc"
-                }
-            }
-        }
-    },
-    "3_Youth": {
-        "summary": "Category: Youth",
-        "value": {
-            "name": "Lydia Tadesse",
-            "age": 22,
-            "sex": "F",
-            "church": "Trinity",
-            "department_id": 1,
-            "category": "YOUTH",
-            "category_details": {
-                "youth": {
-                    "photo_url": "",
-                    "category": "YOUTH",
-                    "phone": "+251911556677",
-                    "education": "University Student",
-                    "occupation": "Student"
-                }
-            }
-        }
-    }
-}
 
 router = APIRouter()
 
-
+# --- 1. CREATE STUDENT ---
 @router.post("/", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
 async def create_student(
-    student_data: StudentCreate = Body(..., examples=student_examples),
+    student_in: StudentCreate,
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
-):
+) -> Any:
     """
-    Create a new student.
-    - Super Admin: Can create students in any department
-    - Admin: Can create students only in their assigned departments
-    - Manager: Can create students only in their assigned departments
+    Create a new student with a full modular profile.
+    - Validates Department Access.
+    - Splits data into Address, Family, Education, etc. tables.
     """
-    # Validate department exists
-    result = await session.execute(
-        select(Department).where(Department.id == student_data.department_id)
-    )
-    department = result.scalar_one_or_none()
-    if not department:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Department not found"
-        )
-
-    # Check permissions
+    # 1. Permission Check: Can this user add to this department?
     if current_user.role != UserRole.SUPER_ADMIN:
         has_access = await check_admin_department_access(
-            current_user, student_data.department_id, session
+            current_user.id, student_in.department_id, session
         )
         if not has_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User does not have access to department {student_data.department_id}"
+                detail=f"You do not have access to department {student_in.department_id}"
             )
 
-    # Create student: extract nested profile and store in `profile_data`
-    payload = student_data.model_dump()
-    category_details = payload.pop("category_details", None) or {}
+    # 2. Check if Department exists (Double check)
+    dept = await session.get(Department, student_in.department_id)
+    if not dept:
+        raise HTTPException(status_code=404, detail="Department not found")
 
-    # Top-level fields we store directly
-    top_level_fields = {"name", "age", "church", "sex", "department_id", "category"}
-    student_kwargs = {k: v for k, v in payload.items() if k in top_level_fields}
-
-    # Extract the nested object that matches the selected category
-    nested = None
-    cat = student_kwargs.get("category")
-    # normalize enum vs string
-    if hasattr(cat, "value"):
-        cat = cat.value
-
-    if cat == "CHILDREN":
-        nested = category_details.get("child")
-    elif cat == "ADOLESCENT":
-        nested = category_details.get("Adolescent")
-    elif cat == "YOUTH":
-        nested = category_details.get("youth")
-    elif cat == "ADULT":
-        nested = category_details.get("Adult")
-
-    new_student = Student(
-        **student_kwargs,
-        profile_data=nested,
-        created_by_id=current_user.id,
+    # 3. Create Core Student Record
+    # We convert the category Enum to a string for the DB (if your DB uses string) 
+    # or keep as Enum if your model uses Enum.
+    db_student = Student(
+        full_name=student_in.full_name,
+        gender=student_in.gender,
+        dob=student_in.dob,
+        photo_url=student_in.photo_url,
+        department_id=student_in.department_id,
+        category=student_in.category, # Model handles the Enum
+        created_by_id=current_user.id
     )
-    session.add(new_student)
+    session.add(db_student)
+    await session.flush() # Flush to get the ID
+
+    # 4. Create Address (Required)
+    db_address = StudentAddress(
+        student_id=db_student.id,
+        **student_in.address.model_dump()
+    )
+    session.add(db_address)
+
+    # 5. Extract Category Specific Details
+    details = None
+    if student_in.category == StudentCategory.CHILDREN:
+        details = student_in.category_details.child
+    elif student_in.category == StudentCategory.ADULT:
+        details = student_in.category_details.adult
+    elif student_in.category == StudentCategory.YOUTH:
+        details = student_in.category_details.youth
+    elif student_in.category == StudentCategory.ADOLESCENT:
+        details = student_in.category_details.adolescent
+
+    # 6. Save Modular Sections (if provided)
+    if details:
+        # -- Family --
+        if getattr(details, "family", None):
+            db_family = StudentFamily(
+                student_id=db_student.id,
+                **details.family.model_dump()
+            )
+            session.add(db_family)
+            
+        # -- Education --
+        if getattr(details, "education", None):
+            db_edu = StudentEducation(
+                student_id=db_student.id,
+                **details.education.model_dump()
+            )
+            session.add(db_edu)
+
+        # -- Spirituality --
+        if getattr(details, "spirituality", None):
+            db_spirit = StudentSpirituality(
+                student_id=db_student.id,
+                **details.spirituality.model_dump()
+            )
+            session.add(db_spirit)
+
+        # -- Health --
+        if getattr(details, "health", None):
+            db_health = StudentHealth(
+                student_id=db_student.id,
+                **details.health.model_dump()
+            )
+            session.add(db_health)
+    
     await session.commit()
-    await session.refresh(new_student)
+    
+    # 7. Refresh with all relations loaded for the response
+    return await _fetch_full_student(session, db_student.id)
 
-    return StudentResponse.model_validate(new_student)
-
-
-@router.put("/{student_id}", response_model=StudentResponse)
-async def update_student(
-    student_id: int,
-    student_update: StudentUpdate,
+@router.get("/detailed/", response_model=List[StudentResponse])
+async def list_students_detailed(
+    skip: int = 0,
+    limit: int = 50,
+    department_id: Optional[int] = Query(None),
+    category: Optional[StudentCategory] = None,
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
-):
+) -> Any:
     """
-    Update a student.
-    - Super Admin: Can update any student
-    - Admin/Manager: Can update students only in their assigned departments
+    Get a FULL DETAILED list of students.
+    Fetches Family, Education, Health, etc. for everyone.
     """
-    result = await session.execute(
-        select(Student).where(Student.id == student_id)
+    query = select(Student).offset(skip).limit(limit)
+
+    # Permission Filter
+    query = await _apply_permission_filter(query, current_user, session, department_id)
+
+    # Category Filter
+    if category:
+        query = query.where(Student.category == category)
+
+    # Eager Load EVERYTHING
+    query = query.options(
+        selectinload(Student.address),
+        selectinload(Student.family),
+        selectinload(Student.education),
+        selectinload(Student.health),
+        selectinload(Student.spirituality),
     )
-    student = result.scalar_one_or_none()
 
-    if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found"
-        )
-
-    # Check permissions for current department
-    if current_user.role != UserRole.SUPER_ADMIN:
-        has_access = await check_admin_department_access(
-            current_user, student.department_id, session
-        )
-        if not has_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User does not have access to this student's department"
-            )
-
-    # If updating department_id, check permissions for new department
-    if student_update.department_id is not None:
-        if current_user.role != UserRole.SUPER_ADMIN:
-            has_access = await check_admin_department_access(
-                current_user, student_update.department_id, session
-            )
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"User does not have access to department {student_update.department_id}"
-                )
-
-    # Update fields
-    update_data = student_update.model_dump(exclude_unset=True)
-
-    # If category_details provided, merge the nested object for the selected category
-    if "category_details" in update_data:
-        new_details = update_data.pop("category_details") or {}
-        cat = student_update.category or student.category
-        # normalize enum vs string
-        if hasattr(cat, "value"):
-            cat = cat.value
-
-        nested_key = None
-        if cat == "CHILDREN":
-            nested_key = "child"
-        elif cat == "ADOLESCENT":
-            nested_key = "Adolescent"
-        elif cat == "YOUTH":
-            nested_key = "youth"
-        elif cat == "ADULT":
-            nested_key = "Adult"
-
-        new_profile = new_details.get(nested_key) if nested_key else None
-        if new_profile is not None:
-            # create a new dict instance so SQLAlchemy detects the change
-            existing = dict(student.profile_data or {})
-            existing.update(new_profile)
-            student.profile_data = existing
-
-    for field, value in update_data.items():
-        setattr(student, field, value)
-
-    await session.commit()
-    await session.refresh(student)
-
-    return StudentResponse.model_validate(student)
-
-
-@router.get("/", response_model=List[StudentResponse])
+    result = await session.execute(query)
+    return result.scalars().all()
+# --- 3. LIST STUDENTS ---
+@router.get("/", response_model=List[StudentSummary])
 async def list_students(
-    department_id: int = Query(None, description="Filter by department ID"),
+    skip: int = 0,
+    limit: int = 100,
+    department_id: Optional[int] = Query(None, description="Filter by department ID"),
+    category: Optional[StudentCategory] = None,
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
-):
+) -> Any:
     """
-    List students.
-    - Super Admin: Can view all students
-    - Admin: Can view students only in their assigned departments
-    - Manager: Can view students only in their assigned departments
+    List students (Summary View).
+    - Admins see only their departments.
+    - Super Admins see all (or filtered).
     """
-    query = select(Student)
+    query = select(Student).offset(skip).limit(limit)
 
-    if current_user.role == UserRole.SUPER_ADMIN:
-        # Super Admin can see all students
+    # 1. Filter by User Access
+    if current_user.role != UserRole.SUPER_ADMIN:
+        user_dept_ids = await get_user_departments(current_user.id, session)
+        if not user_dept_ids:
+            return [] # No access to any departments
+        
+        # If user asks for specific dept, check if they own it
         if department_id:
+            if department_id not in user_dept_ids:
+                raise HTTPException(status_code=403, detail="Access denied to this department")
             query = query.where(Student.department_id == department_id)
+        else:
+            # Show all depts they own
+            query = query.where(Student.department_id.in_(user_dept_ids))
     else:
-        # Admin and Manager can only see students in their departments
-        user_departments = await get_user_departments(current_user.id, session)
-        if not user_departments:
-            return []
-
-        query = query.where(Student.department_id.in_(user_departments))
+        # Super Admin logic
         if department_id:
-            if department_id not in user_departments:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"User does not have access to department {department_id}"
-                )
             query = query.where(Student.department_id == department_id)
+
+    # 2. Filter by Category
+    if category:
+        query = query.where(Student.category == category)
+
+    # 3. Load basic relations for the summary (e.g. Address for location)
+    query = query.options(selectinload(Student.address))
 
     result = await session.execute(query)
     students = result.scalars().all()
-    return [StudentResponse.model_validate(student) for student in students]
+    return students
 
 
+# --- 2. GET STUDENT (READ) ---
 @router.get("/{student_id}", response_model=StudentResponse)
 async def get_student(
     student_id: int,
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
-):
+) -> Any:
     """
-    Get a specific student.
-    - Super Admin: Can view any student
-    - Admin/Manager: Can view students only in their assigned departments
+    Get full student profile.
+    - Checks if user has access to the student's department.
     """
-    result = await session.execute(
-        select(Student).where(Student.id == student_id)
-    )
-    student = result.scalar_one_or_none()
-
+    student = await _fetch_full_student(session, student_id)
+    
     if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found"
-        )
+        raise HTTPException(status_code=404, detail="Student not found")
 
-    # Check permissions
+    # Permission Check
     if current_user.role != UserRole.SUPER_ADMIN:
         has_access = await check_admin_department_access(
-            current_user, student.department_id, session
+            current_user.id, student.department_id, session
         )
         if not has_access:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User does not have access to this student's department"
+                status_code=403, 
+                detail="You do not have access to this student's department"
             )
 
-    return StudentResponse.model_validate(student)
+    return student
 
 
-# Duplicate update endpoint removed; the update logic above handles merging of nested `category_details`.
 
+
+
+
+
+
+# --- 3. GET SINGLE STUDENT (DETAILED) ---
+# Use this when clicking on a specific student.
+@router.get("/detail/{student_id}", response_model=StudentResponse)
+async def get_student_detail(
+    student_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> Any:
+    """
+    Get FULL profile of a single student by ID.
+    """
+    query = select(Student).where(Student.id == student_id).options(
+        selectinload(Student.address),
+        selectinload(Student.family),
+        selectinload(Student.education),
+        selectinload(Student.health),
+        selectinload(Student.spirituality),
+    )
+    
+    result = await session.execute(query)
+    student = result.scalar_one_or_none()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Permission Check
+    if current_user.role != UserRole.SUPER_ADMIN:
+        has_access = await check_admin_department_access(
+            current_user.id, student.department_id, session
+        )
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    return student
+
+
+# --- HELPER: Permission Logic ---
+# Since we use the same permission logic in two places, let's extract it.
+async def _apply_permission_filter(query, current_user, session, filter_dept_id):
+    if current_user.role != UserRole.SUPER_ADMIN:
+        user_dept_ids = await get_user_departments(current_user.id, session)
+        if not user_dept_ids:
+            # If user has no departments, return a query that finds nothing
+            return query.where(Student.id == -1) 
+        
+        if filter_dept_id:
+            if filter_dept_id not in user_dept_ids:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return query.where(Student.department_id == filter_dept_id)
+        else:
+            return query.where(Student.department_id.in_(user_dept_ids))
+    else:
+        # Super Admin
+        if filter_dept_id:
+            return query.where(Student.department_id == filter_dept_id)
+    
+    return query
+
+# --- 4. UPDATE STUDENT ---
+@router.patch("/{student_id}", response_model=StudentResponse)
+async def update_student(
+    student_id: int,
+    student_in: StudentUpdate,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> Any:
+    """
+    Update a student profile (Core info or Nested tables).
+    """
+    # 1. Fetch existing
+    db_student = await _fetch_full_student(session, student_id)
+    if not db_student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # 2. Permission Check
+    if current_user.role != UserRole.SUPER_ADMIN:
+        has_access = await check_admin_department_access(
+            current_user.id, db_student.department_id, session
+        )
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    # 3. Update Core Fields
+    update_data = student_in.model_dump(exclude_unset=True)
+    
+    # Handle core fields explicitly to avoid recursion issues with nested models
+    core_fields = {"full_name", "phone", "photo_url", "dob", "department_id"}
+    for field in core_fields:
+        if field in update_data and update_data[field] is not None:
+            setattr(db_student, field, update_data[field])
+
+    # 4. Helper to update nested relationships
+    async def update_section(model_class, current_instance, new_data_model):
+        if not new_data_model:
+            return
+        
+        data_dict = new_data_model.model_dump(exclude_unset=True)
+        if not data_dict:
+            return
+
+        if current_instance:
+            for key, value in data_dict.items():
+                setattr(current_instance, key, value)
+            session.add(current_instance)
+        else:
+            # Create new if it didn't exist
+            new_instance = model_class(student_id=db_student.id, **data_dict)
+            session.add(new_instance)
+
+    # 5. Apply Nested Updates
+    await update_section(StudentAddress, db_student.address, student_in.address)
+    await update_section(StudentFamily, db_student.family, student_in.family)
+    await update_section(StudentEducation, db_student.education, student_in.education)
+    await update_section(StudentHealth, db_student.health, student_in.health)
+    await update_section(StudentSpirituality, db_student.spirituality, student_in.spirituality)
+
+    await session.commit()
+    return await _fetch_full_student(session, student_id)
+
+
+# --- 5. DELETE STUDENT ---
 @router.delete("/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_student(
     student_id: int,
@@ -320,20 +372,30 @@ async def delete_student(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Delete a student. Only Super Admin can delete students.
+    Delete a student.
     """
-    result = await session.execute(
-        select(Student).where(Student.id == student_id)
-    )
+    result = await session.execute(select(Student).where(Student.id == student_id))
     student = result.scalar_one_or_none()
 
     if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found"
-        )
+        raise HTTPException(status_code=404, detail="Student not found")
 
     await session.delete(student)
     await session.commit()
+    
+    # Return nothing (None) because status is 204
     return None
 
+
+# --- HELPER FUNCTION ---
+async def _fetch_full_student(session: AsyncSession, student_id: int) -> Optional[Student]:
+    """Helper to fetch student with all relationships loaded"""
+    query = select(Student).where(Student.id == student_id).options(
+        selectinload(Student.address),
+        selectinload(Student.family),
+        selectinload(Student.education),
+        selectinload(Student.health),
+        selectinload(Student.spirituality),
+    )
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
