@@ -1,41 +1,58 @@
-from typing import Optional, Annotated
+from typing import Optional, Annotated, List, Tuple
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlmodel import select as sqlmodel_select
+
 from app.db.session import get_session
 from app.models.user import User, UserRole, UserDepartment
-from app.core.security import decode_access_token
-from app.schemas.user import TokenData
+# 1. CHANGE: Import 'decode_token' instead of 'decode_access_token'
+from app.core.security import decode_token
 
+# Define the OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
-
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """Get the current authenticated user from JWT token."""
+    """
+    Validate the access token and return the current user.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    payload = decode_access_token(token)
+    # 2. CHANGE: Use the new decoder
+    payload = decode_token(token)
     if payload is None:
         raise credentials_exception
 
-    email: str = payload.get("sub")
-    if email is None:
+    # 3. CHANGE: Verify this is an 'access' token (not a refresh token)
+    token_type = payload.get("type")
+    if token_type != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type (access token required)",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # 4. CHANGE: Extract User ID (sub), not Email
+    user_id_str: str = payload.get("sub")
+    if user_id_str is None:
+        raise credentials_exception
+    
+    try:
+        user_id = int(user_id_str)
+    except ValueError:
         raise credentials_exception
 
-    token_data = TokenData(email=email)
-
-    # Fetch user from database
+    # 5. CHANGE: Query by ID instead of Email
     result = await session.execute(
-        select(User).where(User.email == token_data.email)
+        select(User).where(User.id == user_id)
     )
     user = result.scalar_one_or_none()
 
@@ -112,23 +129,21 @@ async def check_admin_department_access(
 async def get_current_active_user_with_permissions(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
-) -> tuple[User, AsyncSession]:
+) -> Tuple[User, AsyncSession]:
     """
     Get current user with session for permission checks.
-    Used for operations that require department-based scoping.
     """
     return current_user, session
 
 
 async def require_admin_department_access(
     department_id: int,
-    current_user_and_session: tuple[User, AsyncSession] = Depends(
+    current_user_and_session: Tuple[User, AsyncSession] = Depends(
         get_current_active_user_with_permissions
     ),
-) -> tuple[User, AsyncSession]:
+) -> Tuple[User, AsyncSession]:
     """
     Dependency that ensures an Admin has access to the specified department.
-    Super Admins have access to all departments.
     """
     current_user, session = current_user_and_session
 
@@ -156,13 +171,12 @@ async def require_admin_department_access(
 
 async def require_manager_department_access(
     department_id: int,
-    current_user_and_session: tuple[User, AsyncSession] = Depends(
+    current_user_and_session: Tuple[User, AsyncSession] = Depends(
         get_current_active_user_with_permissions
     ),
-) -> tuple[User, AsyncSession]:
+) -> Tuple[User, AsyncSession]:
     """
     Dependency that ensures a Manager has access to the specified department.
-    Super Admins and Admins have access to all departments.
     """
     current_user, session = current_user_and_session
 
@@ -186,4 +200,3 @@ async def require_manager_department_access(
         )
 
     return current_user, session
-

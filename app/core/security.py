@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Union, Any
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from app.core.config import settings
@@ -17,23 +17,45 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token."""
-    to_encode = data.copy()
+def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Create a short-lived JWT access token.
+    Args:
+        subject: The unique identifier (e.g., user ID or email) to store in 'sub'.
+    """
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    
+    # We explicitly set 'type': 'access' to distinguish it from refresh tokens
+    to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
+    
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 
-def decode_access_token(token: str) -> Optional[dict]:
-    """Decode and verify a JWT token."""
+def create_refresh_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Create a long-lived JWT refresh token.
+    """
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        # Use the DAYS setting from config
+        expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    
+    # We set 'type': 'refresh' so this token cannot be used to access protected endpoints
+    to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
+    
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return encoded_jwt
+
+
+def decode_token(token: str) -> Optional[dict]:
+    """Decode and verify a JWT token (works for both access and refresh)."""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
     except JWTError:
         return None
-
