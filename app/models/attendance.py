@@ -1,5 +1,5 @@
 from typing import Optional, List, TYPE_CHECKING
-from datetime import date, datetime
+from datetime import date, datetime , timezone
 from enum import Enum as PyEnum
 
 from sqlmodel import SQLModel, Field, Relationship
@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     # Avoid circular imports for type checking
     from app.models.student import Student
     from app.models.user import User
+
+
 
 # -----------------------------------------------------------------------------
 # Enums
@@ -37,13 +39,18 @@ class Program(SQLModel, table=True):
     department_id: int = Field(foreign_key="departments.id")
     description: Optional[str] = None
     
-    # Use 'program_type' as the Postgres Enum name
+    # Excellent implementation for Postgres Enums
     type: ProgramType = Field(
         sa_column=Column(SQLAEnum(ProgramType, name="program_type"), nullable=False)
     )
 
+    # 👇 ADD THIS FOR SOFT DELETE 👇
+    is_active: bool = Field(default=True)
+
     created_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # (Optional tip: datetime.utcnow() is deprecated in Python 3.12, use timezone.utc)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     updated_at: Optional[datetime] = None
 
     # Relationships
@@ -69,7 +76,7 @@ class AttendanceSession(SQLModel, table=True):
         default=None, 
         sa_column=Column(SQLAEnum(ProgramType, name="program_type"), nullable=True)
     )
-
+    
     created_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None

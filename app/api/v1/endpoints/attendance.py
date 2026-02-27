@@ -20,7 +20,10 @@ from app.schemas.attendance import (
     AttendanceRecordResponse,
     AttendanceRecordCreate,
     AttendanceBatchCreate,
+    StudentAttendanceList, 
+
 )
+from app.schemas.program import ProgramCreate, ProgramResponse, ProgramUpdate
 from app.schemas.student import StudentResponse
 
 router = APIRouter()
@@ -46,6 +49,9 @@ def check_department_permission(user: User, department_id: int):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to manage this department."
         )
+
+
+
 
 # -----------------------------------------------------------------------------
 # 1. CREATE SESSION (Manual / Standard)
@@ -125,41 +131,24 @@ async def create_attendance_session(
 @router.post("/sessions/batch", status_code=status.HTTP_201_CREATED)
 async def create_attendance_batch(
     data: AttendanceBatchCreate,
-    current_user: User = Depends(get_current_active_user), # CHANGED: Fixed dependency issue
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Create attendance for an entire category in a department on a date (batch mode).
-    - Checks Permissions manually
-    - Finds/Creates Program
-    - Creates Session
-    - Bulk Creates Records
+    Take attendance for a specific Program.
     """
-    
-    # 1. Permission Check
-    check_department_permission(current_user, data.department_id)
-
-    # 2. Find or create Program
-    q = select(Program).where(Program.department_id == data.department_id, Program.type == data.type)
-    res = await session.execute(q)
-    program = res.scalar_one_or_none()
-    
+    # 1. Find the Program explicitly using the ID provided
+    program = await session.get(Program, data.program_id)
     if not program:
-        # Auto-create default program
-        program = Program(
-            name=f"{data.type.value.title()} Program", 
-            department_id=data.department_id, 
-            type=data.type, 
-            description=f"Default {data.type.value} container"
-        )
-        session.add(program)
-        await session.flush()
-        await session.refresh(program)
+        raise HTTPException(status_code=404, detail="Program not found. Please select a valid program.")
 
-    # 3. Normalize Category
+    # 2. Security: Ensure the user manages the department this program belongs to
+    check_department_permission(current_user, program.department_id)
+
+    # Normalize category
     cat_val = data.category.value if hasattr(data.category, 'value') else data.category
 
-    # 4. Check for Duplicate Session
+    # 3. Check for Duplicates (Did we already take attendance for this group today?)
     existing_q = select(AttendanceSession).where(
         AttendanceSession.program_id == program.id,
         AttendanceSession.date == data.date,
@@ -168,56 +157,70 @@ async def create_attendance_batch(
     existing = (await session.execute(existing_q)).scalar_one_or_none()
     
     if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Attendance already taken for this category on this date.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Attendance has already been recorded for this category in this program today."
+        )
 
-    # 5. Create Session
+    # 4. Create the Session (Inheriting safely from the Program)
     new_session = AttendanceSession(
         date=data.date, 
         program_id=program.id, 
-        department_id=data.department_id, 
+        department_id=program.department_id,  # Safely copied from database, not frontend
         target_category=cat_val, 
-        type=data.type, 
+        type=program.type,                    # REGULAR or EVENT safely copied from the program
         created_by_id=current_user.id
     )
     session.add(new_session)
-    await session.flush()
+    await session.flush() # Flush to get the new_session.id
 
-    # 6. Bulk Create Records
+    # 5. Bulk Create Records
+    records_to_add = []
     for r in data.records:
-        status_val = AttendanceStatus.PRESENT if r.present else AttendanceStatus.ABSENT
+        # We REMOVED the "status_val = ..." logic because r.status is already correct!
         rec = AttendanceRecord(
             session_id=new_session.id, 
             student_id=r.student_id, 
-            status=status_val, 
+            status=r.status,  # <--- Use the exact enum the frontend sent
             remarks=r.notes
         )
-        session.add(rec)
-
+        records_to_add.append(rec)
+    
+    session.add_all(records_to_add)
     await session.commit()
-    await session.refresh(new_session)
 
-    return {"status": "success", "session_id": new_session.id, "records_count": len(data.records)}
+    return {
+        "status": "success", 
+        "session_id": new_session.id, 
+        "program_name": program.name,
+        "records_count": len(records_to_add)
+    }
 
 # -----------------------------------------------------------------------------
 # 3. GET ELIGIBLE STUDENTS (For Checklist UI)
 # -----------------------------------------------------------------------------
-@router.get("/eligible-students/", response_model=List[StudentResponse])
+
+
+@router.get("/eligible-students/", response_model=List[StudentAttendanceList])
 async def eligible_students(
     department_id: int = Query(..., description="Department id"),
     category: StudentCategory = Query(..., description="StudentCategory"),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Return students eligible for attendance checklist for the department + category."""
+    """Return an optimized, lightweight list of students for the attendance UI."""
     # Normalize category for query
     cat_val = category.value if hasattr(category, 'value') else category
     
+    # Just a simple, lightning-fast query. No eager loading needed!
     q = select(Student).where(
         Student.department_id == department_id, 
         Student.category == cat_val
     )
+    
     res = await session.execute(q)
     students = res.scalars().all()
+    
     return students
 
 # -----------------------------------------------------------------------------

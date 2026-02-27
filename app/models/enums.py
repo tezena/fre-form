@@ -41,3 +41,10 @@ class ChurchAttendance(str, Enum):
     MONTHLY = "MONTHLY"
     OCCASIONALLY = "OCCASIONALLY"
     NEVER = "NEVER"
+
+
+class AttendanceStatus(str, Enum):
+    PRESENT = "PRESENT"
+    ABSENT = "ABSENT"
+    LATE = "LATE"
+    PERMISSION = "PERMISSION"
