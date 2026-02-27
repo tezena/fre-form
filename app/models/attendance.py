@@ -55,6 +55,7 @@ class Program(SQLModel, table=True):
 
     # Relationships
     sessions: List["AttendanceSession"] = Relationship(back_populates="program")
+    is_active: bool = Field(default=True)
 
 
 class AttendanceSession(SQLModel, table=True):
@@ -76,10 +77,11 @@ class AttendanceSession(SQLModel, table=True):
         default=None, 
         sa_column=Column(SQLAEnum(ProgramType, name="program_type"), nullable=True)
     )
-    
+
     created_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
+    is_active: bool = Field(default=True)
 
     # Relationships
     records: List["AttendanceRecord"] = Relationship(back_populates="session")

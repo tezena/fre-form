@@ -5,14 +5,6 @@ from app.models.attendance import ProgramType, AttendanceStatus , Program
 from app.models.student import StudentCategory
 from app.models.enums import Gender, StudentCategory
 
-# --- SHARED / BASE MODELS ---
-
-
-
-# --- CREATION MODELS ---
-
-
-
 
 # --- 2. ATTENDANCE RECORD SCHEMAS ---
 class AttendanceRecordCreate(BaseModel):
@@ -39,7 +31,8 @@ class AttendanceSessionCreate(BaseModel):
     category: StudentCategory # <--- FIX: Changed from str to StudentCategory
     records: Optional[List[AttendanceRecordCreate]] = None
 
-
+class AttendanceSessionUpdate(BaseModel):
+    date: date
 
 # --- RESPONSE MODELS ---
 
@@ -64,9 +57,11 @@ class AttendanceSessionResponse(BaseModel):
     id: int
     date: date
     department_id: int
+    program_id: int 
     category: StudentCategory # Returns the Enum value
     type: ProgramType
     records: List[AttendanceRecordResponse] = []
+    is_active: bool
 
     class Config:
         from_attributes = True
