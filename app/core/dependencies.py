@@ -10,6 +10,8 @@ from app.models.user import User, UserRole, UserDepartment
 # 1. CHANGE: Import 'decode_token' instead of 'decode_access_token'
 from app.core.security import decode_token
 
+
+
 # Define the OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -200,3 +202,23 @@ async def require_manager_department_access(
         )
 
     return current_user, session
+
+
+
+def require_profile_builder_access(current_user: User = Depends(get_current_active_user)):
+    """
+    Ensures the user belongs to the profile-builder department or is a Super Admin.
+    """
+    if current_user.role == UserRole.SUPER_ADMIN:
+        return current_user
+        
+    # Check if ANY of the user's assigned departments is the profile builder
+    is_builder = any(dept.is_profile_builder for dept in getattr(current_user, "departments", []))
+    
+    if not is_builder:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the Profile Builder department can create or modify student records."
+        )
+        
+    return current_user

@@ -1,6 +1,7 @@
 from sqlmodel import SQLModel, Field, Relationship
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
+from sqlalchemy import Column, JSON
 
 # 1. Import the Link Model Class directly (Essential for the Relationship to work)
 # Assuming you kept UserDepartment in app/models/user.py
@@ -20,6 +21,12 @@ class Department(SQLModel, table=True):
     description: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
+
+    # 1. Identify the master department
+    is_profile_builder: bool = Field(default=False)
+    
+    # 2. Store the list of allowed fields as a JSON array (e.g., ["id", "first_name", "last_name"])
+    allowed_student_fields: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
 
     # Relationships
     

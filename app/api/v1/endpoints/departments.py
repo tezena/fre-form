@@ -2,32 +2,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
 from app.db.session import get_session
 from app.models.department import Department
-from app.core.dependencies import get_current_super_admin, get_current_active_user
-from pydantic import BaseModel
+from app.core.dependencies import get_current_super_admin
+from app.schemas.department import DepartmentCreate, DepartmentUpdate, DepartmentResponse
 
 router = APIRouter()
-
-
-class DepartmentCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-
-class DepartmentUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-
-
-class DepartmentResponse(BaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
 
 @router.post("/", response_model=DepartmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_department(
@@ -47,10 +28,9 @@ async def create_department(
             detail="Department name already exists"
         )
 
-    new_department = Department(
-        name=department_data.name,
-        description=department_data.description,
-    )
+    # 👇 UPDATED: Use model_dump to capture the new FLS rules (is_profile_builder, allowed_fields)
+    new_department = Department(**department_data.model_dump())
+    
     session.add(new_department)
     await session.commit()
     await session.refresh(new_department)
@@ -60,10 +40,11 @@ async def create_department(
 
 @router.get("/", response_model=List[DepartmentResponse])
 async def list_departments(
-    current_user = Depends(get_current_active_user),
+    # 👇 UPDATED: Locked down to Super Admin only
+    current_user = Depends(get_current_super_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    """List all departments. All authenticated users can view departments."""
+    """List all departments. Only Super Admin can view departments."""
     result = await session.execute(select(Department))
     departments = result.scalars().all()
     return [DepartmentResponse.model_validate(dept) for dept in departments]
@@ -72,10 +53,11 @@ async def list_departments(
 @router.get("/{department_id}", response_model=DepartmentResponse)
 async def get_department(
     department_id: int,
-    current_user = Depends(get_current_active_user),
+    # 👇 UPDATED: Locked down to Super Admin only
+    current_user = Depends(get_current_super_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get a specific department. All authenticated users can view departments."""
+    """Get a specific department. Only Super Admin can view departments."""
     result = await session.execute(
         select(Department).where(Department.id == department_id)
     )
@@ -121,7 +103,7 @@ async def update_department(
                 detail="Department name already exists"
             )
 
-    # Update fields
+    # Update fields dynamically (this automatically handles the new fields correctly)
     update_data = department_update.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(department, field, value)
@@ -153,4 +135,3 @@ async def delete_department(
     await session.delete(department)
     await session.commit()
     return None
-
