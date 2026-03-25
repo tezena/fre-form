@@ -137,8 +137,7 @@ class StudentCreate(BaseModel):
     gender: Gender
     dob: date
     photo_url: Optional[str] = None
-    
-    department_id: int
+
     category: StudentCategory
     
     address: AddressCreate
@@ -212,6 +211,7 @@ class HealthResponse(HealthCreate):
 
 class StudentResponse(BaseModel):
     id: int
+    qr_token: str
     full_name: str
     gender: Gender
     dob: date
@@ -234,6 +234,7 @@ class StudentResponse(BaseModel):
 class StudentSummary(BaseModel):
     """Lightweight schema for list views"""
     id: int
+    qr_token: str
     full_name: str
     category: StudentCategory
     gender: Gender

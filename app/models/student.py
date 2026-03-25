@@ -1,7 +1,8 @@
+import uuid
 from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 from sqlmodel import SQLModel, Field, Relationship, JSON
-from sqlalchemy import Column, JSON, Enum as SQLAEnum
+from sqlalchemy import Column, JSON, String, Enum as SQLAEnum
 from app.models.user import User
 from app.models.enums import (
     Gender, MaritalStatus, EducationLevel, 
@@ -15,6 +16,10 @@ class Student(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     full_name: str = Field(index=True)
     photo_url: Optional[str] = None
+    qr_token: str = Field(
+        default_factory=lambda: str(uuid.uuid4()), 
+        sa_column=Column(String, unique=True, index=True, nullable=True) 
+    )
     gender: Gender
     dob: date
     

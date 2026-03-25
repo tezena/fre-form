@@ -20,6 +20,7 @@ def mask_student_data(student, allowed_fields: Optional[List[str]]) -> Dict[str,
     student_dict = {
         # Core Database Fields (Corrected to match your actual model)
         "id": student.id,
+        "qr_token": student.qr_token,
         "full_name": student.full_name,
         "gender": student.gender.value if hasattr(student.gender, 'value') else student.gender,
         "dob": student.dob,

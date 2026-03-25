@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlmodel import select as sqlmodel_select
+from sqlalchemy.orm import selectinload
 
 from app.db.session import get_session
 from app.models.user import User, UserRole, UserDepartment
@@ -205,15 +206,23 @@ async def require_manager_department_access(
 
 
 
-def require_profile_builder_access(current_user: User = Depends(get_current_active_user)):
+async def require_profile_builder_access(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_session)
+):
     """
     Ensures the user belongs to the profile-builder department or is a Super Admin.
     """
     if current_user.role == UserRole.SUPER_ADMIN:
         return current_user
         
-    # Check if ANY of the user's assigned departments is the profile builder
-    is_builder = any(dept.is_profile_builder for dept in getattr(current_user, "departments", []))
+    # Explicitly load the user WITH their departments asynchronously
+    query = select(User).where(User.id == current_user.id).options(selectinload(User.departments))
+    result = await session.execute(query)
+    user_with_depts = result.scalar_one()
+    
+    # Safely check if any of their departments is a profile builder
+    is_builder = any(dept.is_profile_builder for dept in user_with_depts.departments)
     
     if not is_builder:
         raise HTTPException(

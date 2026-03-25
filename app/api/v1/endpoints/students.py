@@ -61,16 +61,34 @@ async def _fetch_full_student(session: AsyncSession, student_id: int) -> Optiona
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_student(
     student_in: StudentCreate,
-    # 👇 PLUGGED IN: Only profile-builder or Super Admin can pass this gate
     current_user: User = Depends(require_profile_builder_access),
     session: AsyncSession = Depends(get_session),
 ) -> Any:
     """Create a new student with a full modular profile. Restricted to Profile Builders."""
     
-    # 1. Check if Target Department exists
-    dept = await session.get(Department, student_in.department_id)
-    if not dept:
-        raise HTTPException(status_code=404, detail="Department not found")
+    # 1. Find the Profile Builder department dynamically
+    query = select(Department).where(Department.is_profile_builder == True)
+    result = await session.execute(query)
+    profile_builder_dept = result.scalar_one_or_none()
+    
+    if not profile_builder_dept:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="System configuration error: No Profile Builder department found."
+        )
+    
+    duplicate_query = select(Student).where(
+        Student.full_name == student_in.full_name,
+        Student.dob == student_in.dob
+    )
+    dup_result = await session.execute(duplicate_query)
+    existing_student = dup_result.first()
+    
+    if existing_student:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A student named '{student_in.full_name}' born on {student_in.dob} is already registered in the system."
+        )
 
     # 2. Create Core Student Record
     db_student = Student(
@@ -78,7 +96,7 @@ async def create_student(
         gender=student_in.gender,
         dob=student_in.dob,
         photo_url=student_in.photo_url,
-        department_id=student_in.department_id,
+        department_id=profile_builder_dept.id,  # 👈 Automatically assigned here!
         category=student_in.category, 
         created_by_id=current_user.id
     )
@@ -115,7 +133,6 @@ async def create_student(
     
     # Return the unmasked DB object (Since they are the builder, they see everything)
     return await _fetch_full_student(session, db_student.id)
-
 
 @router.patch("/{student_id}")
 async def update_student(
