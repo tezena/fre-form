@@ -96,7 +96,8 @@ async def create_student(
         gender=student_in.gender,
         dob=student_in.dob,
         photo_url=student_in.photo_url,
-        department_id=profile_builder_dept.id,  # 👈 Automatically assigned here!
+        department_id=profile_builder_dept.id,  
+        church=student_in.church,
         category=student_in.category, 
         created_by_id=current_user.id
     )

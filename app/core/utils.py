@@ -26,6 +26,7 @@ def mask_student_data(student, allowed_fields: Optional[List[str]]) -> Dict[str,
         "dob": student.dob,
         "photo_url": student.photo_url,
         "category": student.category.value if hasattr(student.category, 'value') else student.category,
+        "church": student.church.value if hasattr(student.church, 'value') else student.church,
         "department_id": student.department_id,
         "is_active": student.is_active,
         

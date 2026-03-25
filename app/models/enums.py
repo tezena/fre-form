@@ -48,3 +48,8 @@ class AttendanceStatus(str, Enum):
     ABSENT = "ABSENT"
     LATE = "LATE"
     PERMISSION = "PERMISSION"
+
+
+class ChurchEnum(str, Enum):
+    ST_GABRIEL = "St. Gabriel"
+    ST_GEORGE = "St. George"

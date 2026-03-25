@@ -6,7 +6,7 @@ from sqlalchemy import Column, JSON, String, Enum as SQLAEnum
 from app.models.user import User
 from app.models.enums import (
     Gender, MaritalStatus, EducationLevel, 
-    OccupationStatus, ChurchAttendance, StudentCategory
+    OccupationStatus, ChurchAttendance, StudentCategory , AttendanceStatus, ChurchEnum
 )
 
 # --- 1. CORE TABLE ---
@@ -30,7 +30,7 @@ class Student(SQLModel, table=True):
     )
     department_id: int = Field(foreign_key="departments.id")
     department: "Department" = Relationship()
-
+    church: Optional[ChurchEnum] = Field(default=None, sa_column=Column(String, nullable=True))
     created_by_user: Optional["User"] = Relationship(
         sa_relationship_kwargs={
             "primaryjoin": "Student.created_by_id==User.id",

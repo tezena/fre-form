@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any, Literal
 from datetime import date , datetime
 from app.models.enums import (
     Gender, MaritalStatus, EducationLevel, 
-    OccupationStatus, ChurchAttendance, StudentCategory
+    OccupationStatus, ChurchAttendance, StudentCategory , ChurchEnum
 )
 from app.models.student import StudentCategory # Ensure this is your Enum
 
@@ -139,7 +139,7 @@ class StudentCreate(BaseModel):
     photo_url: Optional[str] = None
 
     category: StudentCategory
-    
+    church: ChurchEnum
     address: AddressCreate
     
     # The Magic Switch
@@ -217,6 +217,7 @@ class StudentResponse(BaseModel):
     dob: date
     photo_url: Optional[str] = None
     category: StudentCategory
+    church: Optional[ChurchEnum]
     department_id: int
     is_active: bool
     created_at: datetime
@@ -237,6 +238,7 @@ class StudentSummary(BaseModel):
     qr_token: str
     full_name: str
     category: StudentCategory
+    church: Optional[ChurchEnum]
     gender: Gender
     dob: date
     photo_url: Optional[str] = None
